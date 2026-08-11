@@ -339,6 +339,10 @@
     <div class="breath-title">It happened. That's okay.</div>
     <div class="breath-sub">One cigarette doesn't erase what you've done. Logging it starts your current streak clock over from now — but your longest streak and everything you've saved so far stay exactly as they are.</div>
     <div class="log-form active">
+      <div class="field" style="text-align:left; margin-bottom:2px;">
+        <label for="slip-time">When did you smoke?</label>
+        <input type="datetime-local" id="slip-time" />
+      </div>
       <textarea id="slip-note" placeholder="What happened? (optional — just for you)"></textarea>
       <button class="btn" id="slip-confirm" style="background: var(--undertow); color:#1A0D06;">Log it and reset the clock</button>
       <button class="btn btn-ghost" id="slip-cancel">Never mind, I didn't</button>
@@ -410,6 +414,9 @@
     return symbol + n.toLocaleString(undefined, {maximumFractionDigits: 0});
   }
   function pad(n){ return String(n).padStart(2,'0'); }
+  function toLocalDatetimeValue(date){
+    return new Date(date.getTime() - date.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  }
 
   function renderStats(){
     if(!profile) return;
@@ -578,7 +585,7 @@
     document.getElementById('onboard').style.display = 'flex';
     if(profile){
       const d = new Date(profile.quitDate);
-      const localStr = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16);
+      const localStr = toLocalDatetimeValue(d);
       document.getElementById('ob-quitdate').value = localStr;
       document.getElementById('ob-perday').value = profile.perDay;
       document.getElementById('ob-packsize').value = profile.packSize;
@@ -677,6 +684,10 @@
 
   document.getElementById('slip-open').addEventListener('click', () => {
     document.getElementById('slip-note').value = '';
+    const now = new Date();
+    const timeInput = document.getElementById('slip-time');
+    timeInput.value = toLocalDatetimeValue(now);
+    timeInput.max = toLocalDatetimeValue(now);
     slipOverlay.classList.add('active');
   });
   function closeSlipOverlay(){ slipOverlay.classList.remove('active'); }
@@ -686,9 +697,16 @@
   document.getElementById('slip-confirm').addEventListener('click', async () => {
     if(!profile) return;
     const note = document.getElementById('slip-note').value.trim();
-    const now = Date.now();
     const quitAt = new Date(profile.quitDate).getTime();
-    const elapsed = Math.max(0, now - quitAt);
+    const nowActual = Date.now();
+
+    const timeVal = document.getElementById('slip-time').value;
+    let smokedAt = timeVal ? new Date(timeVal).getTime() : nowActual;
+    // Keep it sane: can't be in the future, and can't predate the quit date this streak started from.
+    smokedAt = Math.min(smokedAt, nowActual);
+    smokedAt = Math.max(smokedAt, quitAt);
+
+    const elapsed = Math.max(0, smokedAt - quitAt);
     const streakDaysBefore = Math.floor(elapsed / MS_DAY);
 
     const cigsAvoidedThisStreak = elapsed * (profile.perDay / MS_DAY);
@@ -698,11 +716,12 @@
     profile.lifetimeCigsAvoided = (profile.lifetimeCigsAvoided || 0) + cigsAvoidedThisStreak;
     profile.lifetimeMoneySaved = (profile.lifetimeMoneySaved || 0) + moneySavedThisStreak;
     profile.slipCount = (profile.slipCount || 0) + 1;
-    profile.quitDate = new Date(now).toISOString();
+    // The new streak clock starts from the actual smoke time, not from whenever this form gets submitted.
+    profile.quitDate = new Date(smokedAt).toISOString();
 
     await saveProfile(profile);
 
-    slips.push({ time: new Date(now).toISOString(), note, streakDaysBefore });
+    slips.push({ time: new Date(smokedAt).toISOString(), note, streakDaysBefore });
     await saveSlips(slips);
     renderSlips();
 
@@ -723,7 +742,7 @@
       startTicking();
     }else{
       const now = new Date();
-      const localStr = new Date(now.getTime() - now.getTimezoneOffset()*60000).toISOString().slice(0,16);
+      const localStr = toLocalDatetimeValue(now);
       document.getElementById('ob-quitdate').value = localStr;
       document.getElementById('onboard').style.display = 'flex';
     }
