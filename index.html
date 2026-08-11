@@ -44,7 +44,9 @@
   .wordmark{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom: 30px; }
   .wordmark h1{ font-family: var(--display); font-weight:600; font-size: 22px; letter-spacing: 0.02em; }
   .wordmark span{ color: var(--muted); font-size: 12px; }
-  .reset-link{ background:none; border:none; color: var(--muted); font-family: var(--body); font-size: 11px; cursor:pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .header-links{ display:flex; gap: 10px; align-items:center; }
+  .reset-link{ background:none; border:none; color: var(--muted); font-family: var(--body); font-size: 11px; cursor:pointer; text-decoration: underline; text-underline-offset: 3px; white-space:nowrap; }
+  .reset-link.slip{ color: var(--undertow); }
 
   /* ---- Hero breathing ring ---- */
   .hero{ display:flex; flex-direction:column; align-items:center; margin-bottom: 34px; }
@@ -73,6 +75,11 @@
   .tile-label{ font-size: 11px; text-transform:uppercase; letter-spacing:0.1em; color: var(--muted); margin-bottom: 8px; }
   .tile-value{ font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--text); }
   .tile-sub{ font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .lifetime-strip{ display:none; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+  .lifetime-strip.visible{ display:grid; }
+  .lifetime-strip .tile{ padding: 12px 16px; }
+  .lifetime-strip .tile-value{ font-size: 17px; }
 
   .milestone-card{ background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 26px; }
   .milestone-card .tile-label{ margin-bottom: 6px; }
@@ -109,6 +116,7 @@
   .log-entry-time{ font-size: 12px; color: var(--muted); font-family: var(--mono); }
   .log-entry-note{ font-size: 13px; color: var(--text); }
   .log-entry-badge{ font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 6px; background: var(--undertow-dim); color: #FFD9C7; white-space:nowrap; }
+  .log-entry-badge.neutral{ background: var(--surface-2); color: var(--muted); }
   .craving-summary{ display:flex; gap: 12px; margin-bottom: 18px; }
   .craving-summary .tile{ flex:1; padding: 13px; }
 
@@ -209,7 +217,10 @@
       <h1>Surface</h1>
       <span>staying above it, one breath at a time</span>
     </div>
-    <button class="reset-link" id="reset-btn">edit details</button>
+    <div class="header-links">
+      <button class="reset-link slip" id="slip-open">log a slip</button>
+      <button class="reset-link" id="reset-btn">edit details</button>
+    </div>
   </div>
 
   <div class="hero">
@@ -239,6 +250,17 @@
     </div>
   </div>
 
+  <div class="lifetime-strip" id="lifetime-strip">
+    <div class="tile">
+      <div class="tile-label">Longest streak</div>
+      <div class="tile-value" id="stat-longest">—</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">All-time saved</div>
+      <div class="tile-value" id="stat-lifetime-money">—</div>
+    </div>
+  </div>
+
   <div class="milestone-card">
     <div class="tile-label">Current milestone</div>
     <div class="milestone-title" id="ms-title">—</div>
@@ -249,6 +271,7 @@
   <div class="tabs">
     <div class="tab active" data-panel="panel-milestones">Milestones</div>
     <div class="tab" data-panel="panel-cravings">Craving log</div>
+    <div class="tab" data-panel="panel-slips">Slips</div>
   </div>
 
   <div class="panel active" id="panel-milestones">
@@ -267,6 +290,10 @@
       </div>
     </div>
     <div id="craving-list"></div>
+  </div>
+
+  <div class="panel" id="panel-slips">
+    <div id="slip-list"></div>
   </div>
 </div>
 
@@ -306,10 +333,24 @@
   </div>
 </div>
 
+<div class="overlay" id="slip-overlay">
+  <button class="overlay-close" id="slip-close">&times;</button>
+  <div style="max-width: 320px; display:flex; flex-direction:column; align-items:center;">
+    <div class="breath-title">It happened. That's okay.</div>
+    <div class="breath-sub">One cigarette doesn't erase what you've done. Logging it starts your current streak clock over from now — but your longest streak and everything you've saved so far stay exactly as they are.</div>
+    <div class="log-form active">
+      <textarea id="slip-note" placeholder="What happened? (optional — just for you)"></textarea>
+      <button class="btn" id="slip-confirm" style="background: var(--undertow); color:#1A0D06;">Log it and reset the clock</button>
+      <button class="btn btn-ghost" id="slip-cancel">Never mind, I didn't</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   const STORAGE_KEY = 'surface-quit-profile';
   const CRAVINGS_KEY = 'surface-craving-log';
+  const SLIPS_KEY = 'surface-slip-log';
 
   const MS_MIN = 60000, MS_HOUR = 3600000, MS_DAY = 86400000;
 
@@ -330,6 +371,7 @@
 
   let profile = null;
   let cravings = [];
+  let slips = [];
   let tickHandle = null;
   let breathTimers = [];
   let selectedIntensity = null;
@@ -353,6 +395,15 @@
   }
   async function saveCravings(list){
     try{ localStorage.setItem(CRAVINGS_KEY, JSON.stringify(list)); }catch(e){ console.error('save cravings failed', e); }
+  }
+  async function loadSlips(){
+    try{
+      const raw = localStorage.getItem(SLIPS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }catch(e){ return []; }
+  }
+  async function saveSlips(list){
+    try{ localStorage.setItem(SLIPS_KEY, JSON.stringify(list)); }catch(e){ console.error('save slips failed', e); }
   }
 
   function fmtMoney(n, symbol){
@@ -382,6 +433,19 @@
     document.getElementById('stat-cigs').textContent = Math.floor(cigsAvoided).toLocaleString();
     document.getElementById('stat-money').textContent = fmtMoney(moneySaved, profile.currency);
     document.getElementById('stat-money-sub').textContent = 'based on ' + profile.perDay + '/day at ' + profile.currency + profile.price + ' per pack';
+
+    const longestMs = Math.max(profile.longestStreakMs || 0, elapsed);
+    const lifetimeCigs = (profile.lifetimeCigsAvoided || 0) + cigsAvoided;
+    const lifetimeMoney = (profile.lifetimeMoneySaved || 0) + moneySaved;
+
+    const strip = document.getElementById('lifetime-strip');
+    if((profile.slipCount || 0) > 0){
+      strip.classList.add('visible');
+      document.getElementById('stat-longest').textContent = Math.floor(longestMs / MS_DAY).toLocaleString() + ' days';
+      document.getElementById('stat-lifetime-money').textContent = fmtMoney(lifetimeMoney, profile.currency);
+    }else{
+      strip.classList.remove('visible');
+    }
 
     renderMilestones(elapsed);
   }
@@ -446,6 +510,24 @@
     });
   }
 
+  function renderSlips(){
+    const list = document.getElementById('slip-list');
+    if(slips.length === 0){
+      list.innerHTML = '<div class="log-empty">No slips logged. If one happens, it goes here — not as a strike against you, just as data.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    slips.slice().reverse().forEach(s => {
+      const d = new Date(s.time);
+      const row = document.createElement('div');
+      row.className = 'log-entry';
+      const timeStr = d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) + ' · ' + d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+      const streakStr = s.streakDaysBefore != null ? (s.streakDaysBefore + ' day streak') : '';
+      row.innerHTML = '<div class="log-entry-left"><div class="log-entry-time">'+timeStr+'</div>'+(s.note ? '<div class="log-entry-note">'+escapeHtml(s.note)+'</div>' : '')+'</div>'+(streakStr ? '<div class="log-entry-badge neutral">'+streakStr+'</div>' : '');
+      list.appendChild(row);
+    });
+  }
+
   function escapeHtml(s){
     const d = document.createElement('div');
     d.textContent = s;
@@ -478,7 +560,11 @@
 
     profile = {
       quitDate: quitDateVal ? new Date(quitDateVal).toISOString() : new Date().toISOString(),
-      perDay, packSize, price, currency
+      perDay, packSize, price, currency,
+      longestStreakMs: (profile && profile.longestStreakMs) || 0,
+      lifetimeCigsAvoided: (profile && profile.lifetimeCigsAvoided) || 0,
+      lifetimeMoneySaved: (profile && profile.lifetimeMoneySaved) || 0,
+      slipCount: (profile && profile.slipCount) || 0
     };
     await saveProfile(profile);
     document.getElementById('onboard').style.display = 'none';
@@ -586,11 +672,51 @@
 
   document.getElementById('craving-skip').addEventListener('click', closeOverlay);
 
+  // ---- Slip logging ----
+  const slipOverlay = document.getElementById('slip-overlay');
+
+  document.getElementById('slip-open').addEventListener('click', () => {
+    document.getElementById('slip-note').value = '';
+    slipOverlay.classList.add('active');
+  });
+  function closeSlipOverlay(){ slipOverlay.classList.remove('active'); }
+  document.getElementById('slip-close').addEventListener('click', closeSlipOverlay);
+  document.getElementById('slip-cancel').addEventListener('click', closeSlipOverlay);
+
+  document.getElementById('slip-confirm').addEventListener('click', async () => {
+    if(!profile) return;
+    const note = document.getElementById('slip-note').value.trim();
+    const now = Date.now();
+    const quitAt = new Date(profile.quitDate).getTime();
+    const elapsed = Math.max(0, now - quitAt);
+    const streakDaysBefore = Math.floor(elapsed / MS_DAY);
+
+    const cigsAvoidedThisStreak = elapsed * (profile.perDay / MS_DAY);
+    const moneySavedThisStreak = (cigsAvoidedThisStreak / profile.packSize) * profile.price;
+
+    profile.longestStreakMs = Math.max(profile.longestStreakMs || 0, elapsed);
+    profile.lifetimeCigsAvoided = (profile.lifetimeCigsAvoided || 0) + cigsAvoidedThisStreak;
+    profile.lifetimeMoneySaved = (profile.lifetimeMoneySaved || 0) + moneySavedThisStreak;
+    profile.slipCount = (profile.slipCount || 0) + 1;
+    profile.quitDate = new Date(now).toISOString();
+
+    await saveProfile(profile);
+
+    slips.push({ time: new Date(now).toISOString(), note, streakDaysBefore });
+    await saveSlips(slips);
+    renderSlips();
+
+    closeSlipOverlay();
+    renderStats();
+  });
+
   // ---- Boot ----
   (async function init(){
     profile = await loadProfile();
     cravings = await loadCravings();
+    slips = await loadSlips();
     renderCravings();
+    renderSlips();
 
     if(profile){
       document.getElementById('app').style.display = 'block';
