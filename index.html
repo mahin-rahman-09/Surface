@@ -38,7 +38,8 @@
   .wordmark h1{ font-family: var(--display); font-weight:600; font-size: 22px; letter-spacing: 0.02em; }
   .wordmark span{ color: var(--muted); font-size: 12px; }
   .header-links{ display:flex; gap: 10px; align-items:center; flex-wrap: wrap; justify-content: flex-end; }
-  .reset-link{ background:none; border:none; color: var(--muted); font-family: var(--body); font-size: 11px; cursor:pointer; text-decoration: underline; text-underline-offset: 3px; white-space:nowrap; }
+  .reset-link{ background:none; border:none; color: var(--muted); font-family: var(--body); font-size: 11px; cursor:pointer; text-decoration: underline; text-underline-offset: 3px; white-space:nowrap; position:relative; }
+  .reset-link.has-badge::after{ content:''; position:absolute; top:-4px; right:-8px; width:6px; height:6px; border-radius:50%; background: var(--undertow); }
   .reset-link.slip{ color: var(--undertow); }
 
   /* ---- Hero breathing ring ---- */
@@ -404,7 +405,7 @@
         <input type="text" id="sync-gistid" placeholder="paste from your other device" autocomplete="off" />
       </div>
       <div class="form-row-label" style="text-align:left; line-height:1.5;">
-        First device: leave the Gist ID blank — connecting creates it and shows you the ID to enter here on your other device. Whichever device has more recent data wins if the two have diverged.
+        First device: leave the Gist ID blank — connecting creates it and shows you the ID to enter here on your other device. If the two ever end up with a different amount logged, Surface will ask before overwriting either one.
       </div>
       <button class="btn btn-air" id="sync-connect">Connect</button>
     </div>
@@ -420,7 +421,22 @@
       <button class="btn btn-ghost" id="sync-disconnect" style="width:100%;">Disconnect this device</button>
     </div>
 
+    <div style="display:none; width:100%;" id="sync-conflict">
+      <div class="form-row-label" style="text-align:left; line-height:1.6; margin-bottom:16px; color: var(--undertow);" id="sync-conflict-text"></div>
+      <button class="btn" id="sync-keep-local" style="width:100%; margin-bottom:10px; background: var(--air); color:#06231C;">Keep this device's data</button>
+      <button class="btn btn-ghost" id="sync-use-remote" style="width:100%;">Use the synced version instead</button>
+    </div>
+
     <div id="sync-error" style="color: var(--undertow); font-size:12px; margin-top:16px; text-align:center; display:none;"></div>
+
+    <div style="width:100%; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line);">
+      <div class="form-row-label" style="text-align:left; margin-bottom:10px;">
+        <strong>Recovery</strong> — restore from this device's last automatic backup, or paste in data copied from a GitHub Gist revision.
+      </div>
+      <button class="reset-link" id="sync-restore-backup" style="margin-bottom:10px; display:none;"></button>
+      <textarea id="sync-import-text" placeholder="Paste exported JSON here to restore it" style="height: 70px; margin-bottom: 10px;"></textarea>
+      <button class="btn btn-ghost" id="sync-import-btn" style="width:100%;">Restore from pasted data</button>
+    </div>
   </div>
 </div>
 
@@ -432,6 +448,8 @@
   const SYNC_META_KEY = 'surface-sync-meta';
   const LAST_MODIFIED_KEY = 'surface-last-modified';
   const GIST_FILENAME = 'surface-data.json';
+  const BACKUP_KEY = 'surface-local-backup';
+  const CONFLICT_KEY = 'surface-sync-conflict';
 
   const MS_MIN = 60000, MS_HOUR = 3600000, MS_DAY = 86400000;
 
@@ -573,7 +591,14 @@
     });
   }
 
+  async function backupLocalSnapshot(){
+    await storageSet(BACKUP_KEY, JSON.stringify({
+      profile, cravings, slips, backedUpAt: Date.now()
+    }));
+  }
+
   async function adoptRemotePayload(remote){
+    await backupLocalSnapshot(); // always keep one step back, regardless of how this got triggered
     profile = remote.profile;
     cravings = remote.cravings || [];
     slips = remote.slips || [];
@@ -588,9 +613,23 @@
     syncPushTimer = setTimeout(() => runSync({ silent: true }), 1500);
   }
 
+  function reRenderAfterDataChange(){
+    if(document.getElementById('onboard').style.display !== 'flex'){
+      renderStats(); renderCravings(); renderSlips(); renderInsights();
+    }else if(profile){
+      document.getElementById('onboard').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      startTicking(); renderCravings(); renderSlips(); renderInsights();
+    }
+  }
+
   // Pull-then-decide: if the gist has newer data than this device, adopt it;
-  // otherwise push this device's data up. Simple last-write-wins — fine for
-  // one person using two devices, not built for simultaneous editing.
+  // otherwise push this device's data up. Simple last-write-wins by
+  // timestamp — EXCEPT: if the remote side has noticeably fewer logged
+  // entries than this device, that's a strong signal something's wrong
+  // (wrong Gist ID pasted, a fresh device connected and got treated as
+  // "newer", etc.) rather than a real update, so it stops and asks instead
+  // of silently overwriting a bigger history with a smaller one.
   async function runSync(opts){
     opts = opts || {};
     const meta = await getSyncMeta();
@@ -599,15 +638,17 @@
     try{
       const remote = await pullRemote(meta.token, meta.gistId);
       const localMod = await getLocalModified();
+      const localTotal = cravings.length + slips.length;
+      const remoteTotal = remote ? (remote.cravings || []).length + (remote.slips || []).length : 0;
 
       if(remote && (remote.updatedAt || 0) > localMod){
-        await adoptRemotePayload(remote);
-        if(document.getElementById('onboard').style.display !== 'flex'){
-          renderStats(); renderCravings(); renderSlips(); renderInsights();
-        }else if(profile){
-          document.getElementById('onboard').style.display = 'none';
-          document.getElementById('app').style.display = 'block';
-          startTicking(); renderCravings(); renderSlips(); renderInsights();
+        if(localTotal > 0 && remoteTotal < localTotal){
+          await storageSet(CONFLICT_KEY, JSON.stringify(remote));
+          updateSyncBadge();
+          if(!opts.silent) updateSyncStatusUI(null);
+        }else{
+          await adoptRemotePayload(remote);
+          reRenderAfterDataChange();
         }
       }else{
         await pushRemote(meta.token, meta.gistId);
@@ -1137,6 +1178,11 @@
     return Math.floor(diff/MS_DAY) + 'd ago';
   }
 
+  async function updateSyncBadge(){
+    const conflictRaw = await storageGet(CONFLICT_KEY);
+    document.getElementById('sync-open').classList.toggle('has-badge', !!conflictRaw);
+  }
+
   async function updateSyncStatusUI(errorMsg){
     const meta = await getSyncMeta();
     const errBox = document.getElementById('sync-error');
@@ -1146,18 +1192,99 @@
     }else{
       errBox.style.display = 'none';
     }
-    if(meta && meta.gistId){
-      document.getElementById('sync-setup').classList.remove('active');
-      document.getElementById('sync-setup').style.display = 'none';
+
+    const conflictRaw = await storageGet(CONFLICT_KEY);
+    document.getElementById('sync-setup').style.display = 'none';
+    document.getElementById('sync-status').style.display = 'none';
+    document.getElementById('sync-conflict').style.display = 'none';
+
+    if(conflictRaw){
+      const remote = JSON.parse(conflictRaw);
+      const localTotal = cravings.length + slips.length;
+      const remoteTotal = (remote.cravings || []).length + (remote.slips || []).length;
+      document.getElementById('sync-conflict-text').textContent =
+        'This device has ' + localTotal + ' logged entries (cravings + slips); the synced copy only has ' + remoteTotal + '. ' +
+        'Pick which one to keep — the other will be overwritten.';
+      document.getElementById('sync-conflict').style.display = 'block';
+    }else if(meta && meta.gistId){
       document.getElementById('sync-status').style.display = 'block';
       document.getElementById('sync-gistid-display').textContent = meta.gistId;
       document.getElementById('sync-last').textContent = meta.lastSyncedAt ? ('Last synced ' + humanizeAgo(meta.lastSyncedAt)) : 'Not synced yet';
     }else{
       document.getElementById('sync-setup').style.display = 'flex';
-      document.getElementById('sync-setup').classList.add('active');
-      document.getElementById('sync-status').style.display = 'none';
     }
+
+    const backupRaw = await storageGet(BACKUP_KEY);
+    const restoreBtn = document.getElementById('sync-restore-backup');
+    if(backupRaw){
+      const backup = JSON.parse(backupRaw);
+      restoreBtn.style.display = 'inline-block';
+      restoreBtn.textContent = 'restore this device\'s backup from ' + humanizeAgo(backup.backedUpAt);
+    }else{
+      restoreBtn.style.display = 'none';
+    }
+
+    updateSyncBadge();
   }
+
+  async function applyPayloadWithBackup(payload){
+    await backupLocalSnapshot();
+    profile = payload.profile;
+    cravings = payload.cravings || [];
+    slips = payload.slips || [];
+    await storageSet(STORAGE_KEY, JSON.stringify(profile));
+    await storageSet(CRAVINGS_KEY, JSON.stringify(cravings));
+    await storageSet(SLIPS_KEY, JSON.stringify(slips));
+    await touchModified();
+    reRenderAfterDataChange();
+  }
+
+  document.getElementById('sync-keep-local').addEventListener('click', async () => {
+    const meta = await getSyncMeta();
+    if(meta && meta.gistId){
+      try{ await pushRemote(meta.token, meta.gistId); }catch(e){ console.error(e); }
+    }
+    await storageSet(CONFLICT_KEY, '');
+    await updateSyncStatusUI(null);
+  });
+
+  document.getElementById('sync-use-remote').addEventListener('click', async () => {
+    const conflictRaw = await storageGet(CONFLICT_KEY);
+    if(conflictRaw){
+      await applyPayloadWithBackup(JSON.parse(conflictRaw));
+    }
+    await storageSet(CONFLICT_KEY, '');
+    const meta = await getSyncMeta();
+    if(meta){ meta.lastSyncedAt = Date.now(); await saveSyncMeta(meta); }
+    await updateSyncStatusUI(null);
+  });
+
+  document.getElementById('sync-restore-backup').addEventListener('click', async () => {
+    const backupRaw = await storageGet(BACKUP_KEY);
+    if(!backupRaw) return;
+    const backup = JSON.parse(backupRaw);
+    await applyPayloadWithBackup({ profile: backup.profile, cravings: backup.cravings, slips: backup.slips });
+    await updateSyncStatusUI(null);
+  });
+
+  document.getElementById('sync-import-btn').addEventListener('click', async () => {
+    const raw = document.getElementById('sync-import-text').value.trim();
+    const errBox = document.getElementById('sync-error');
+    if(!raw){ return; }
+    try{
+      const parsed = JSON.parse(raw);
+      if(!parsed || typeof parsed !== 'object' || !('cravings' in parsed || 'profile' in parsed)){
+        throw new Error('That doesn\'t look like Surface data — expecting the JSON from a Gist revision or backup.');
+      }
+      await applyPayloadWithBackup(parsed);
+      document.getElementById('sync-import-text').value = '';
+      errBox.style.display = 'none';
+      await updateSyncStatusUI(null);
+    }catch(e){
+      errBox.textContent = 'Could not import: ' + e.message;
+      errBox.style.display = 'block';
+    }
+  });
 
   document.getElementById('sync-open').addEventListener('click', () => {
     updateSyncStatusUI(null);
@@ -1238,6 +1365,7 @@
     renderCravings();
     renderSlips();
     renderInsights();
+    updateSyncBadge();
 
     if(profile){
       document.getElementById('app').style.display = 'block';
