@@ -375,11 +375,13 @@
         <label for="slip-time">When did you smoke?</label>
         <input type="datetime-local" id="slip-time" />
       </div>
+      <div class="form-row-label" id="slip-time-hint" style="text-align:left; margin-bottom:4px;"></div>
       <div>
         <div class="form-row-label" style="margin-bottom:8px;">What led to it? (optional)</div>
         <div class="trigger-chips" id="slip-trigger-chips"></div>
       </div>
       <textarea id="slip-note" placeholder="What happened? (optional — just for you)"></textarea>
+      <div id="slip-error" style="color: var(--undertow); font-size:12px; display:none; margin-top:2px;"></div>
       <button class="btn" id="slip-confirm" style="background: var(--undertow); color:#1A0D06;">Log it and reset the clock</button>
       <button class="btn btn-ghost" id="slip-cancel">Never mind, I didn't</button>
     </div>
@@ -1127,12 +1129,21 @@
 
   document.getElementById('slip-open').addEventListener('click', () => {
     document.getElementById('slip-note').value = '';
+    document.getElementById('slip-error').style.display = 'none';
     selectedSlipTrigger = null;
     document.querySelectorAll('#slip-trigger-chips .trigger-chip').forEach(b=>b.classList.remove('selected','warn'));
     const now = new Date();
     const timeInput = document.getElementById('slip-time');
     timeInput.value = toLocalDatetimeValue(now);
     timeInput.max = toLocalDatetimeValue(now);
+    const hint = document.getElementById('slip-time-hint');
+    if(profile){
+      const quitAt = new Date(profile.quitDate);
+      timeInput.min = toLocalDatetimeValue(quitAt);
+      hint.textContent = 'Your current streak started ' + quitAt.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ' — this can\'t be set earlier than that.';
+    }else{
+      hint.textContent = '';
+    }
     slipOverlay.classList.add('active');
   });
   function closeSlipOverlay(){ slipOverlay.classList.remove('active'); }
@@ -1144,12 +1155,21 @@
     const note = document.getElementById('slip-note').value.trim();
     const quitAt = new Date(profile.quitDate).getTime();
     const nowActual = Date.now();
+    const errBox = document.getElementById('slip-error');
 
     const timeVal = document.getElementById('slip-time').value;
     let smokedAt = timeVal ? new Date(timeVal).getTime() : nowActual;
-    // Keep it sane: can't be in the future, and can't predate the quit date this streak started from.
     smokedAt = Math.min(smokedAt, nowActual);
-    smokedAt = Math.max(smokedAt, quitAt);
+
+    // A slip can't predate the streak it's supposedly ending — if it does,
+    // stop and say so instead of silently clamping to quitAt, which used to
+    // look like the form just did nothing.
+    if(smokedAt < quitAt){
+      errBox.textContent = 'That\'s before your current streak started (' + new Date(quitAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + '), so there\'s nothing to reset from there. If your quit date itself is wrong, fix it from "edit details" instead.';
+      errBox.style.display = 'block';
+      return;
+    }
+    errBox.style.display = 'none';
 
     const elapsed = Math.max(0, smokedAt - quitAt);
     const streakDaysBefore = Math.floor(elapsed / MS_DAY);
