@@ -202,6 +202,7 @@
 
 <div id="onboard" class="onboard" style="display:none;">
   <div class="onboard-card">
+    <div id="storage-warning" style="display:none; background: rgba(255,122,80,0.12); border: 1px solid var(--undertow); border-radius: 10px; padding: 14px 16px; margin-bottom: 22px; font-size: 13px; line-height: 1.55; color: var(--text);"></div>
     <div class="onboard-eyebrow">Before you start</div>
     <div class="onboard-title">When did you come up for air?</div>
     <div class="onboard-desc">A few numbers, and Surface will track everything from here — your streak, what you're saving, and how your body is healing.</div>
@@ -230,6 +231,7 @@
       </div>
     </div>
     <button class="btn btn-air" id="ob-submit">Start tracking</button>
+    <div class="form-row-label" style="margin-top: 14px; text-align:left; line-height:1.5;">If this asks again next time you open the app, your browser is likely clearing site data on close, or you're in a private/incognito window — check your browser's privacy settings for "clear cookies and site data on exit" and turn it off for this site.</div>
   </div>
 </div>
 
@@ -496,11 +498,27 @@
   // Claude's per-user storage here in preview, and localStorage once deployed;
   // visits (until site data is cleared), and never leaves the device on its
   // own — sync (below) is opt-in and talks only to GitHub, using your token.
+  let storageBroken = false;
+
   async function storageGet(key){
-    try{ const r = await window.storage.get(key); return r ? r.value : null; }catch(e){ return null; }
+    try{ const r = await window.storage.get(key); return r ? r.value : null; }catch(e){ storageBroken = true; return null; }
   }
   async function storageSet(key, value){
-    try{ await window.storage.set(key, value); }catch(e){ console.error('storage set failed', key, e); }
+    try{ await window.storage.set(key, value); }catch(e){ storageBroken = true; console.error('storage set failed', key, e); }
+  }
+  async function testStorageWorks(){
+    try{
+      const testKey = '__surface_storage_test__';
+      await window.storage.set(testKey, '1');
+      const r = await window.storage.get(testKey);
+      const ok = r && r.value === '1';
+      await window.storage.delete(testKey);
+      if(!ok) storageBroken = true;
+      return !!ok;
+    }catch(e){
+      storageBroken = true;
+      return false;
+    }
   }
 
   async function loadProfile(){
@@ -1387,6 +1405,8 @@
 
   // ---- Boot ----
   (async function init(){
+    const storageWorks = await testStorageWorks();
+
     profile = await loadProfile();
     cravings = await loadCravings();
     slips = await loadSlips();
@@ -1403,6 +1423,12 @@
       const localStr = toLocalDatetimeValue(now);
       document.getElementById('ob-quitdate').value = localStr;
       document.getElementById('onboard').style.display = 'flex';
+
+      if(!storageWorks){
+        const warning = document.getElementById('storage-warning');
+        warning.innerHTML = '<strong>This browser isn\'t saving data right now.</strong> If you filled this in before and it\'s asking again, that\'s why. Common causes: private/incognito browsing, opening this as a downloaded file instead of the live web link, or a browser setting that clears site data on close (check Settings → Privacy → "Clear cookies/site data when you close the browser," and turn it off for this site). Try opening the deployed link in a normal browser window.';
+        warning.style.display = 'block';
+      }
     }
 
     // If sync is configured, reconcile with the gist shortly after load,
