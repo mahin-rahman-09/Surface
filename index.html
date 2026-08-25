@@ -1426,7 +1426,14 @@
 
       if(!storageWorks){
         const warning = document.getElementById('storage-warning');
-        warning.innerHTML = '<strong>This browser isn\'t saving data right now.</strong> If you filled this in before and it\'s asking again, that\'s why. Common causes: private/incognito browsing, opening this as a downloaded file instead of the live web link, or a browser setting that clears site data on close (check Settings → Privacy → "Clear cookies/site data when you close the browser," and turn it off for this site). Try opening the deployed link in a normal browser window.';
+        let isBrave = false;
+        try{ isBrave = !!(navigator.brave && await navigator.brave.isBrave()); }catch(e){}
+
+        if(isBrave){
+          warning.innerHTML = '<strong>Brave is blocking this app\'s storage.</strong> Click the Shields icon (the lion) in the address bar for this site, check the "Cookies" setting, and switch it from "Block all cookies" to "Allow all cookies" — Brave treats localStorage as part of that same permission, so blocking all cookies blocks the app\'s data too. Reload after changing it.';
+        }else{
+          warning.innerHTML = '<strong>This browser isn\'t saving data right now.</strong> If you filled this in before and it\'s asking again, that\'s why. Common causes: private/incognito browsing, opening this as a downloaded file instead of the live web link, or a browser setting that clears site data on close (check Settings → Privacy → "Clear cookies/site data when you close the browser," and turn it off for this site). Try opening the deployed link in a normal browser window.';
+        }
         warning.style.display = 'block';
       }
     }
